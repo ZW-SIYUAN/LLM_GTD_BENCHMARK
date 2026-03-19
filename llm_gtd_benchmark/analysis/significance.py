@@ -78,7 +78,8 @@ _METRIC_REGISTRY: Dict[str, Tuple[str, bool, Optional[str]]] = {
     "mle_tstr_primary": ("result3.mle_tstr", True, None),   # extracted as mean of dict
     "lle_tstr_primary": ("result3.lle_tstr", True, None),
     # Dim 4 – privacy
-    "dcr_5th_percentile": ("result4.dcr_5th_percentile", True, "result4.dcr_5th_ci"),
+    "dcr_5th_percentile":  ("result4.dcr_5th_percentile",  True,  "result4.dcr_5th_ci"),
+    "dcr_95th_percentile": ("result4.dcr_95th_percentile", False, "result4.dcr_95th_ci"),
     "exact_match_rate": ("result4.exact_match_rate", False, "result4.exact_match_rate_ci"),
     # Dim 5 – fairness
     "delta_eo_mean": ("result5.delta_eo", False, "result5.delta_eo_ci"),     # mean over cols

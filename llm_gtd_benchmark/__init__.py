@@ -69,6 +69,14 @@ from llm_gtd_benchmark.analysis.significance import (
     SignificanceReport,
     MetricTestResult,
 )
+from llm_gtd_benchmark.models import (
+    BaseTabularModel,
+    GReaTModel,
+    PAFTModel,
+    GraFTModel,
+    GraDeModel,
+)
+from llm_gtd_benchmark.models.paft import discover_fd_order
 
 __all__ = [
     # Core
@@ -120,6 +128,13 @@ __all__ = [
     "SignificanceTester",
     "SignificanceReport",
     "MetricTestResult",
+    # Models
+    "BaseTabularModel",
+    "GReaTModel",
+    "PAFTModel",
+    "GraFTModel",
+    "GraDeModel",
+    "discover_fd_order",
 ]
 
 __version__ = "0.1.0"

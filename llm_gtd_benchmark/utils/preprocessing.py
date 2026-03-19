@@ -23,7 +23,9 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
 from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 from llm_gtd_benchmark.core.schema import DataSchema
@@ -66,7 +68,15 @@ def build_feature_encoder(
 
     transformers = []
     if cont_names:
-        transformers.append(("continuous", StandardScaler(), cont_names))
+        # Mean-impute before scaling so that legitimate NaN values in
+        # continuous columns (e.g. sensor readings not taken in medical data)
+        # do not propagate into the feature matrix and break distance-based
+        # metrics.  The imputer is fitted on *real_df* only (domain anchor).
+        cont_pipe = Pipeline([
+            ("impute", SimpleImputer(strategy="mean")),
+            ("scale", StandardScaler()),
+        ])
+        transformers.append(("continuous", cont_pipe, cont_names))
     if cat_names:
         ohe = _make_ohe()
         transformers.append(("categorical", ohe, cat_names))

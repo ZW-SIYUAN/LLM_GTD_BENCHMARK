@@ -376,9 +376,10 @@ class ResultAggregator:
             _COMPACT_COLS = {
                 "irr":             "IRR (↓)",
                 "mean_ks":         "KS (↓)",
-                "dsi_gap":         "DSI Gap (↓)",
+                "dsi_relative_gap_pct": "DSI Gap % (↓)",
                 "utility_tstr_f1": "TSTR F1 (↑)",
                 "dcr_5th":         "DCR 5th (↑)",
+                "dcr_95th":        "DCR 95th (↓)",
                 "delta_eo_mean":   "ΔEO (↓)",
             }
             available = ["Score"] + [c for c in _COMPACT_COLS if c in df.columns]
@@ -573,6 +574,7 @@ class ResultAggregator:
 
         # ── Dim2 ──────────────────────────────────────────────────────────────
         s["dsi_gap"] = _safe(r2, "dsi_gap")
+        s["dsi_relative_gap_pct"] = _safe(r2, "dsi_relative_gap")
         s["dsi_synth_ll"] = _safe(r2, "dsi_synth_ll")
         s["icvr"] = _safe(r2, "icvr")
         s["hcs_violation_rate"] = _safe(r2, "hcs_violation_rate")
@@ -597,6 +599,7 @@ class ResultAggregator:
 
         # ── Dim4 ──────────────────────────────────────────────────────────────
         s["dcr_5th"] = _safe(r4, "dcr_5th_percentile")
+        s["dcr_95th"] = _safe(r4, "dcr_95th_percentile")
         s["exact_match_rate"] = _safe(r4, "exact_match_rate")
         s["dlt_gap"] = _safe(r4, "dlt_gap")
 

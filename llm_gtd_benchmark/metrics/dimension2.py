@@ -98,6 +98,10 @@ class Dim2Result:
     dsi_gap:
         ``dsi_real_ll - dsi_synth_ll``.  Lower = better (0 = perfect match).
         This is the cross-dataset-comparable form of DSI.
+    dsi_relative_gap:
+        ``dsi_gap / |dsi_real_ll| * 100``.  Relative gap as a percentage of
+        the real log-likelihood.  Scale-independent and comparable across
+        datasets.  Lower = better (0% = perfect match).
     icvr:
         Inter-Column Violation Rate — fraction of synthetic rows violating at
         least one registered functional dependency.  Range [0, 1]; lower = better.
@@ -125,6 +129,13 @@ class Dim2Result:
     dsi_gap: float = _NAN
     gmm_n_components: int = 0
 
+    @property
+    def dsi_relative_gap(self) -> float:
+        """Relative DSI gap as percentage of |dsi_real_ll|. Lower = better (0% = perfect)."""
+        if np.isnan(self.dsi_gap) or np.isnan(self.dsi_real_ll) or self.dsi_real_ll == 0:
+            return float("nan")
+        return self.dsi_gap / abs(self.dsi_real_ll) * 100
+
     # ICVR
     icvr: float = _NAN
     icvr_per_fd: Dict[str, float] = field(default_factory=dict)
@@ -142,12 +153,16 @@ class Dim2Result:
         def _f(v: float) -> str:
             return f"{v:.4f}" if not np.isnan(v) else "  N/A "
 
+        def _pct(v: float) -> str:
+            return f"{v:.2f}%" if not np.isnan(v) else "  N/A "
+
         lines = [
             "── Dimension 2: Cross-Column Logic & Dependencies ────────",
             "  DSI (Distributional Similarity Index):",
             f"    Synth log-likelihood        : {_f(self.dsi_synth_ll)}",
             f"    Real  log-likelihood (ref)  : {_f(self.dsi_real_ll)}",
             f"    Gap   (↓ better, 0=perfect) : {_f(self.dsi_gap)}",
+            f"    Relative gap (↓ better, 0%) : {_pct(self.dsi_relative_gap)}",
             f"    GMM components selected     : {self.gmm_n_components}",
             "  ICVR (Functional Dependency Violation Rate, ↓ better):",
         ]

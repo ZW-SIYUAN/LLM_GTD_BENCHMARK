@@ -98,6 +98,11 @@ class Dim4Result:
         5th percentile of the Distance to Closest Record (DCR) distribution.
         Higher values mean synthetic points are farther from training records
         (safer).  Computed under the mixed L1 heterogeneous metric.
+    dcr_95th_percentile:
+        95th percentile of the DCR distribution.  Captures the most "distant"
+        synthetic points — i.e. those least resembling any real training record.
+        Excessively large values indicate the model generates out-of-distribution
+        noise rather than plausible synthetic data.  Lower is better (↓).
     exact_match_rate:
         Fraction of synthetic rows with DCR < ``exact_match_threshold``.
         Values exceeding 1 % suggest potential verbatim copying of training data.
@@ -116,6 +121,7 @@ class Dim4Result:
 
     # Black-box
     dcr_5th_percentile: float = _NAN
+    dcr_95th_percentile: float = _NAN
     exact_match_rate: float = _NAN
     distance_strategy: str = ""
 
@@ -126,6 +132,7 @@ class Dim4Result:
 
     # Bootstrap CIs (populated only when n_boot > 0 is passed to evaluate())
     dcr_5th_ci: Optional[Tuple[float, float]] = None
+    dcr_95th_ci: Optional[Tuple[float, float]] = None
     exact_match_rate_ci: Optional[Tuple[float, float]] = None
 
     @property
@@ -136,7 +143,8 @@ class Dim4Result:
         lines = [
             "── Dimension 4: Privacy & Anti-Memorization ──────────────────",
             "  Black-box distance metrics (DCR):",
-            f"    DCR 5th percentile  (↑ safer) : {_fmt(self.dcr_5th_percentile)}",
+            f"    DCR 5th  percentile (↑ safer) : {_fmt(self.dcr_5th_percentile)}",
+            f"    DCR 95th percentile (↓ real)  : {_fmt(self.dcr_95th_percentile)}",
             f"    Exact match rate    (↓ safer) : {_fmt(self.exact_match_rate)}",
             f"    Distance strategy             : {self.distance_strategy or 'N/A'}",
         ]
@@ -267,6 +275,7 @@ class PrivacyEvaluator:
         min_dists = self._compute_dcr(synth_df, self.real_train_df)
 
         dcr_5th = float(np.percentile(min_dists, 5))
+        dcr_95th = float(np.percentile(min_dists, 95))
         exact_rate = float(np.mean(min_dists < self.exact_match_threshold))
 
         if exact_rate > self.exact_match_warn_rate:
@@ -283,11 +292,13 @@ class PrivacyEvaluator:
             )
 
         logger.info(
-            "Dim4: DCR_5th=%.6f, exact_match_rate=%.4f", dcr_5th, exact_rate
+            "Dim4: DCR_5th=%.6f, DCR_95th=%.6f, exact_match_rate=%.4f",
+            dcr_5th, dcr_95th, exact_rate,
         )
 
         result = Dim4Result(
             dcr_5th_percentile=dcr_5th,
+            dcr_95th_percentile=dcr_95th,
             exact_match_rate=exact_rate,
             distance_strategy=self._strategy,
         )
@@ -302,8 +313,9 @@ class PrivacyEvaluator:
 
             rng = np.random.default_rng(self.random_state)
 
-            # DCR 5th percentile CI — resample per-synthetic-row DCR distances
+            # DCR 5th / 95th percentile CI — resample per-synthetic-row DCR distances
             result.dcr_5th_ci = bootstrap_percentile_ci(min_dists, 5.0, n_boot, boot_ci, rng)
+            result.dcr_95th_ci = bootstrap_percentile_ci(min_dists, 95.0, n_boot, boot_ci, rng)
 
             # Exact match rate CI — resample boolean indicators
             exact_bool = (min_dists < self.exact_match_threshold).astype(np.float64)

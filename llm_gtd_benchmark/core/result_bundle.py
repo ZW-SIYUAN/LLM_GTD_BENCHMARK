@@ -245,12 +245,14 @@ def _dim3_from_dict(d: Dict) -> Dim3Result:
 def _dim4_to_dict(r: Dim4Result) -> Dict:
     return {
         "dcr_5th_percentile": _nan_to_null(r.dcr_5th_percentile),
+        "dcr_95th_percentile": _nan_to_null(r.dcr_95th_percentile),
         "exact_match_rate": _nan_to_null(r.exact_match_rate),
         "distance_strategy": r.distance_strategy,
         "dlt_masked_ppl_train": _nan_to_null(r.dlt_masked_ppl_train),
         "dlt_masked_ppl_test": _nan_to_null(r.dlt_masked_ppl_test),
         "dlt_gap": _nan_to_null(r.dlt_gap),
         "dcr_5th_ci": _ci_to_list(getattr(r, "dcr_5th_ci", None)),
+        "dcr_95th_ci": _ci_to_list(getattr(r, "dcr_95th_ci", None)),
         "exact_match_rate_ci": _ci_to_list(getattr(r, "exact_match_rate_ci", None)),
     }
 
@@ -258,6 +260,7 @@ def _dim4_to_dict(r: Dim4Result) -> Dict:
 def _dim4_from_dict(d: Dict) -> Dim4Result:
     r = Dim4Result(
         dcr_5th_percentile=_null_to_nan(d.get("dcr_5th_percentile")),
+        dcr_95th_percentile=_null_to_nan(d.get("dcr_95th_percentile")),
         exact_match_rate=_null_to_nan(d.get("exact_match_rate")),
         distance_strategy=d.get("distance_strategy", ""),
         dlt_masked_ppl_train=_null_to_nan(d.get("dlt_masked_ppl_train")),
@@ -265,6 +268,7 @@ def _dim4_from_dict(d: Dict) -> Dim4Result:
         dlt_gap=_null_to_nan(d.get("dlt_gap")),
     )
     r.dcr_5th_ci = _list_to_ci(d.get("dcr_5th_ci"))
+    r.dcr_95th_ci = _list_to_ci(d.get("dcr_95th_ci"))
     r.exact_match_rate_ci = _list_to_ci(d.get("exact_match_rate_ci"))
     return r
 

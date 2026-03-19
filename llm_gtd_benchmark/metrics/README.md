@@ -46,6 +46,18 @@ clean_df + IRR
 | `defect_counts["out_of_bounds"]` | 超出训练集域边界的行数 | — |
 | `clean_df` | 通过所有检查的干净 DataFrame | — |
 
+**各指标计算方式：**
+
+- **`irr`**：`n_invalid / n_total`，其中 `n_invalid` 为以下三类缺陷的并集（一行触发任意一类即为无效行）。
+
+- **`type_coercion_nan`**：对每个连续列，尝试将合成值强制转换为 float；转换失败（NaN）的行计入此类。
+
+- **`oov_hallucination`**：对每个分类列，检查合成值是否在训练集词表（`frozenset`）内；不在词表内的视为"词表外幻觉"。特殊情况：若真实列全为 NaN（词表为空集），则合成列中任何非 NaN 值均视为幻觉，NaN 值视为合法。
+
+- **`out_of_bounds`**：对每个连续列，检查合成值是否超出训练集的 `[min, max]` 范围（允许 Schema 中配置的 `bounds_slack` 弹性余量）。
+
+- **`clean_df`**：移除所有无效行后的剩余 DataFrame，直接传入 Dim1–Dim5。
+
 ---
 
 ## `dimension1.py` — 分布保真度评估器
@@ -68,6 +80,28 @@ clean_df + IRR
 | `c2st_auc_rf` | 全局 | RandomForest 鉴别器 AUC | → 0.5 |
 | `skipped_columns` | 诊断 | 被排除出边缘分布计算的列及原因（空字典表示所有列均正常） | — |
 
+**各指标计算方式：**
+
+- **`mean_ks`**：对每个连续列调用 `scipy.stats.ks_2samp(real_col, synth_col)`，取返回的 KS 统计量（两条经验 CDF 之间的最大绝对差）；对所有连续列求均值得到 `mean_ks`。
+
+- **`mean_tvd`**：对每个分类列，统计真实与合成的类别频率，计算 `0.5 × Σ|p_i − q_i|`（仅出现在一方的类别按 0 处理）；对所有分类列求均值得到 `mean_tvd`。
+
+- **`pearson_matrix_error`**：对所有连续列分别计算真实和合成的 Pearson 相关矩阵，取上三角（不含对角线）的逐元素绝对差均值（MAE）。
+
+- **`cramerv_matrix_error`**：对所有分类列的每对组合，用 `chi2_contingency` 计算偏差校正后的 Cramér's V，构成相关矩阵；真实和合成矩阵上三角的 MAE 即为该指标。单列无变化（退化列联表）时 Cramér's V 返回 0.0。
+
+- **`alpha_precision` / `beta_recall`**（Alaa et al. 2022）：
+  1. 用共享 ColumnTransformer（连续列 StandardScaler + SimpleImputer，分类列 OrdinalEncoder）将真实和合成数据编码为数值矩阵 R 和 S。
+  2. 对 R 中每个点，计算其第 k 个真实近邻距离 δ_k(r) 作为"支撑半径"（k 默认 5）。
+  3. **α-precision**：对 S 中每个合成点 s，找其最近真实点 r*；若 `d(s, r*) ≤ δ_k(r*)`，则 s 落在真实流形内。α-precision = 满足条件的合成点比例。低 α 说明合成数据偏离真实流形（幻觉多）。
+  4. **β-recall**：对 R 中每个真实点 r，找其最近合成点 s*；若 `d(r, s*) ≤ δ_k(r)`，则 r 被合成数据覆盖。β-recall = 满足条件的真实点比例。低 β 说明模式崩溃（合成数据覆盖不全）。
+
+- **`c2st_auc_xgb` / `c2st_auc_rf`**：
+  1. 真实数据打标签 `y=1`，合成数据打标签 `y=0`，拼接为混合数据集。
+  2. 用同一 ColumnTransformer 编码为数值矩阵。
+  3. StratifiedKFold 5 折交叉验证：每折用 4 份训练分类器，在第 5 份（含真实+合成）上用预测概率计算 ROC-AUC；取 5 折均值。
+  4. XGBoost 参数：n_estimators=300, max_depth=6, learning_rate=0.05, subsample=0.8。RandomForest 参数：n_estimators=300, max_depth=10。两者独立运行，分别输出。
+
 **α/β 定义（Alaa et al. 2022）：** 每个真实点的第 k 个近邻距离作为自适应半径，无需人工设定带宽。
 
 **防御机制：** 若某列在真实数据或合成数据中全为 NaN，该列会被跳过（soft skip），不影响其他列的计算。具体原因记录在 `Dim1Result.skipped_columns` 中，同时触发 `logger.warning`，使 `result.summary` 可直接展示跳过详情，便于诊断数据质量问题。
@@ -84,16 +118,34 @@ clean_df + IRR
 
 | 指标 | 适用性 | 含义 | 方向 |
 |---|---|---|---|
-| `dsi_gap` | 全局（Universal） | GMM 对数似然差距（实际 - 合成） | ↓（0 = 完美） |
+| `dsi_gap` | 全局（Universal） | GMM 对数似然差距（实际 - 合成），绝对值 | ↓（0 = 完美） |
+| `dsi_relative_gap` | 全局 | `dsi_gap / |dsi_real_ll| × 100%`，相对百分比，跨数据集可比 | ↓（0% = 完美） |
 | `dsi_synth_ll` | 全局 | 合成数据在真实 GMM 下的对数似然均值 | ↑ |
 | `icvr` | 需 `known_fds` | 函数依赖违背率 [0,1] | ↓ |
 | `hcs_violation_rate` | 需 `hierarchies` | 层次树拓扑违背率 [0,1] | ↓ |
 | `mdi_mean` | 需 `math_equations` | 数学恒等式违背率均值（相对误差 > ε） | ↓ |
 
+**各指标计算方式：**
+
+- **`dsi_gap` / `dsi_synth_ll` / `dsi_relative_gap`**：
+  1. 仅取连续列；若连续列数 > 20，先用 PCA 降至 20 维。
+  2. 在真实训练数据上拟合 GaussianMixture，n_components 从 `[1,2,3,5,8]` 中由 BIC 准则自动选取最优值。
+  3. `dsi_synth_ll` = GMM 对合成数据（连续列）的对数似然均值。
+  4. `dsi_real_ll` = GMM 对真实留出数据的对数似然均值（参考上界）。
+  5. `dsi_gap` = `dsi_real_ll − dsi_synth_ll`（绝对差距）。gap 越接近 0，说明合成数据在真实分布下的密度与真实数据相当。
+  6. `dsi_relative_gap` = `dsi_gap / |dsi_real_ll| × 100`（相对百分比）。**绝对 gap 依赖数据集维度和量纲，跨数据集无可比性**；相对百分比消除了量纲影响，可直接判断质量好坏：通常 < 5% 为优秀，5–15% 为良好，> 15% 需关注。
+
+- **`icvr`**（需 `LogicSpec.known_fds`）：对每条函数依赖 LHS→RHS，在合成数据中找与真实数据 LHS 值相同的行，检查其 RHS 是否也一致；违背行数 / 可检查总行数即为违背率。
+
+- **`hcs_violation_rate`**（需 `LogicSpec.hierarchies`）：对每条层次约束（如"city 必须属于其对应的 state"），逐行检查合成数据中父子类别的拓扑关系；违背行数 / 总行数即为违背率。
+
+- **`mdi_mean`**（需 `LogicSpec.math_equations`）：对每条数学等式（如 `total_rooms = bedrooms + other_rooms`），计算合成数据的相对误差 `|lhs − rhs| / max(|rhs|, ε)`；超过阈值 ε 的行视为违背；各等式违背率的均值即为 `mdi_mean`。
+
 **DSI 工程细节：**
 - 仅对连续列拟合 GMM（避免混合数据类型问题）
 - 连续列 > 20 时自动 PCA 降维至 20 维（防维灾）
 - BIC 在 `[1,2,3,5,8]` 上自动选最优 n_components
+- `dsi_relative_gap` 是计算属性（property），不存储在 JSON 结果文件中，每次从 `dsi_gap` 和 `dsi_real_ll` 动态计算
 
 ---
 
@@ -145,6 +197,18 @@ PipelineConfig(
 )
 ```
 
+**各指标计算方式：**
+
+- **`mle_tstr`**：
+  1. 特征预处理：ColumnTransformer 在**真实测试集**上 fit（域锚点），避免合成训练集统计污染。连续列 StandardScaler，分类列 OrdinalEncoder（`handle_unknown='use_encoded_value'`）。
+  2. 在**合成数据**上训练分类/回归模型（XGBoost / RandomForest / LogisticRegression 或 Ridge）。
+  3. 在**真实测试集**上评估：分类任务输出 `roc_auc`（多分类用 OVR 宏平均）和 `macro_f1`；回归任务输出 `r2` 和 `wmape`。
+  4. 超参：`"shared"` 模式下在真实训练集上用 Optuna TPE（30 次试验）搜索最优超参，同一套参数用于 TSTR 和 TRTR；`"independent"` 模式下各自独立调参。
+
+- **`mle_trtr`**：同 TSTR 流程，但训练集替换为**真实训练集**，作为性能上限基线。
+
+- **`utility_gap`**：`mle_trtr[metric] − mle_tstr[metric]`，正值表示真实数据优于合成数据的程度。每个模型（XGBoost / RF / LR）各自计算一个 gap 值。
+
 **防御机制：**
 - `OrdinalEncoder(handle_unknown='use_encoded_value')` 防止合成/真实数据类别集不一致导致的崩溃
 - 预处理在真实测试集上 fit（域锚点），避免合成训练集统计信息污染特征空间
@@ -178,7 +242,8 @@ PipelineConfig(
 
 | 字段 | 含义 | 方向 |
 |---|---|---|
-| `dcr_5th_percentile` | DCR 分布第 5 百分位数（最近记录距离）| ↑ 越高越安全 |
+| `dcr_5th_percentile` | DCR 分布第 5 百分位数（最近记录距离下界）| ↑ 越高越安全 |
+| `dcr_95th_percentile` | DCR 分布第 95 百分位数（最远记录距离上界）| ↓ 越小越真实 |
 | `exact_match_rate` | DCR < ε 的合成行占比（近似复制率）| ↓ 越低越好 |
 | `distance_strategy` | 实际使用的计算策略（诊断用）| — |
 
@@ -193,6 +258,27 @@ dist(x, y) = Σ |x_cont − y_cont|   (MinMax 归一化至 [0,1])
 - **FAISS IndexFlatL1**：类别特征最大基数 ≤ 200 且 faiss 已安装时启用。分类特征 One-hot 后乘以 0.5 还原 Hamming 等价关系，与连续特征拼接送入 FAISS。最快路径。
 - **分块 Numpy 广播（Chunked Broadcasting）**：高基数类别（如邮政编码）或 faiss 未安装时的 fallback。双重分块（默认 chunk_size=512），峰值内存 O(chunk²×n_features)，不构造完整 N×M 矩阵。
 - 两条路径实现同一距离度量，结果等价。
+
+**各指标计算方式：**
+
+- **`dcr_5th_percentile`**：
+  1. 对每个合成行 s，计算其到所有真实训练行的混合 L1 距离（连续列 MinMax 归一化后取绝对差，分类列取 Hamming 0/1），取其中最小值 `dcr(s)`。
+  2. 收集所有合成行的 `dcr` 值，取第 5 百分位数。值越高说明即使是最接近真实数据的那 5% 合成样本也保持了足够距离，隐私保护越好。
+
+- **`dcr_95th_percentile`**：
+  1. 同上计算所有合成行的 `dcr(s)`。
+  2. 取第 95 百分位数，即最"离群"的那 5% 合成样本的距离上界。
+  3. 值越小说明合成数据整体贴近真实分布，模型没有生成无意义的离群噪声；值过大则说明模型在某些区域生成了与真实数据差异极大的样本，保真度差。
+  4. **与 `dcr_5th` 配合解读**：前者是隐私安全下界（越大越好），后者是保真度上界（越小越好），两者共同约束"离真实数据不能太近也不能太远"。
+
+- **`exact_match_rate`**：`dcr(s) < ε` 的合成行占总合成行的比例（近似复制率）；ε 默认为归一化距离空间中的极小值（所有列均完全匹配时距离为 0）。
+
+- **`dlt_masked_ppl_train` / `dlt_masked_ppl_test`**（需生成器权重）：
+  1. 将真实训练/测试行序列化为 `ColumnA is ValueA, ColumnB is ValueB` 格式。
+  2. 用 `return_offsets_mapping` 精确定位值 Token 的字符边界，将列名和分隔符的 label 设为 -100（PyTorch ignore index）。
+  3. 在生成器 LLM 上前向传播，仅对值 Token 计算交叉熵损失，取 exp 得到 Masked PPL。
+
+- **`dlt_gap`**：`dlt_masked_ppl_test − dlt_masked_ppl_train`。若生成器严重记忆了训练集，train PPL 会异常低（模型能"背诵"训练值），gap 会显著为正。
 
 **防御机制：** `exact_match_rate > exact_match_warn_rate`（默认 1%）时触发 `DataCopyingWarning`，明确提示隐私风险。
 
@@ -250,6 +336,24 @@ FairSpec(
 | `bias_nmi_real` | 每个保护属性在**真实训练集**上与 target 的 NMI（参考基线）| — |
 | `bias_nmi_synth` | 每个保护属性在**合成数据**上的 NMI（审计对象）| ↓ 越低偏差越小 |
 | Δ = nmi_synth − nmi_real | 正值 = 放大偏差；负值 = 抑制偏差（可能过度修正）| → 0 |
+
+**各指标计算方式：**
+
+- **`bias_nmi_real` / `bias_nmi_synth`**：
+  1. 连续型保护属性先通过 KBinsDiscretizer（等频分箱，n_bins=5，在真实训练集 fit）离散化为类别。
+  2. 调用 `sklearn.metrics.normalized_mutual_info_score(protected_col, target_col)` 分别在真实训练集和合成数据上计算 NMI，公式为 `NMI(A;Y) = MI(A;Y) / sqrt(H(A)·H(Y))` ∈ [0,1]。
+
+- **`delta_dp`**（Demographic Parity，人口统计均等）：在真实测试集上，按保护属性分组，计算各组的**正例预测率**（predicted positive rate）；`delta_dp` = 各组正例预测率的最大值 − 最小值。
+
+- **`delta_eop`**（Equal Opportunity，机会均等）：按保护属性分组，计算各组的 **TPR**（True Positive Rate，真正例率）；`delta_eop` = 各组 TPR 的最大值 − 最小值。
+
+- **`delta_eo`**（Equalized Odds，均等化赔率）：同时考虑 TPR 和 FPR（False Positive Rate）；`delta_eo = max(max组间TPR差, max组间FPR差)`。比 ΔEOP 更严格，兼顾受益侧（TPR）和伤害侧（FPR）。
+
+- **`stat_parity_gap`**（回归任务）：按保护属性分组，计算各组的**预测均值**；`stat_parity_gap` = 各组预测均值的最大值 − 最小值。
+
+- **`intersectional_delta_dp`**（需 `intersectional=True`）：将所有保护属性进行笛卡尔积分组（如 "Female×Black"），在组合分组上计算 ΔDP 或 ΔSPG。
+
+> **TSTR 探针配置（Dim5 内部固定）：** XGBoost，n_estimators=100, max_depth=6，不调参——目的是审计偏差而非最大化性能。特征预处理在真实测试集上 fit，与 Dim3 惯例一致。
 
 **NMI 公式：** `NMI(A;Y) = MI(A;Y) / sqrt(H(A)·H(Y))` ∈ [0, 1]，由 `sklearn.metrics.normalized_mutual_info_score` 计算。连续属性先通过共享 KBinsDiscretizer 离散化。
 
@@ -317,7 +421,7 @@ FairSpec(
 **雷达轴归一化说明：**
 
 - `Privacy` 轴：若提供 `dcr_reference`，归一化为 `DCR / dcr_reference`；否则为 `DCR / max_DCR`（相对）
-- `Logic` 轴：`1 / (1 + dsi_gap)` 映射 [0,∞) → (0,1]，无需外部参考值
+- `Logic` 轴：`1 / (1 + dsi_gap)` 映射 [0,∞) → (0,1]，无需外部参考值；面向人类读者的 summary 和排行榜额外展示 `dsi_relative_gap`（相对百分比，跨数据集可比）
 - `Fidelity` 轴：内含 `1 - |C2ST_AUC - 0.5| / 0.5`（C2ST 偏离理想值越大，保真度分越低）
 - 其他轴：直接使用原始分或 1-metric（越高越好方向统一）
 

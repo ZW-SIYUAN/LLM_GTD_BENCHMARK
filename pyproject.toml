@@ -23,6 +23,29 @@ dependencies = [
 faiss = ["faiss-cpu>=1.7"]
 dev = ["pytest>=7", "pytest-cov", "ruff"]
 
+# Generative model dependencies (install with: pip install "llm-gtd-benchmark[models]")
+models = [
+    "torch>=2.0",
+    "transformers>=4.35",
+    "datasets>=2.14",
+    "accelerate>=0.24",
+    "peft>=0.7",
+    "be-great>=0.0.4",
+    "networkx>=3.0",
+]
+
+# All extras
+all = [
+    "faiss-cpu>=1.7",
+    "torch>=2.0",
+    "transformers>=4.35",
+    "datasets>=2.14",
+    "accelerate>=0.24",
+    "peft>=0.7",
+    "be-great>=0.0.4",
+    "networkx>=3.0",
+]
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["llm_gtd_benchmark*"]

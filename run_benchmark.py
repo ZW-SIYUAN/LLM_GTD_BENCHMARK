@@ -159,6 +159,7 @@ def run_all():
                 target_col=ds_cfg["target_col"],
                 task_type=ds_cfg["task_type"],
                 fair_spec=ds_cfg["fair_spec"],
+                dimensions=[0, 1, 2, 3, 4],   # skip Dim5 fairness
                 n_boot=0,          # disable bootstrap for speed; enable with n_boot=500
                 random_state=42,
                 notes=f"synth_file={synth_path.name}",
@@ -239,11 +240,13 @@ def build_leaderboard(bundles: dict) -> pd.DataFrame:
             "c2st_auc_mean":  g(r1, "c2st_auc_mean"),
             # Dim 2
             "dsi_gap":        g(r2, "dsi_gap"),
+            "dsi_relative_gap_pct": g(r2, "dsi_relative_gap"),
             "icvr":           g(r2, "icvr"),
             # Dim 3
             "mle_tstr_primary": g_dict_mean(r3, "mle_tstr"),
             # Dim 4
             "dcr_5th":        g(r4, "dcr_5th_percentile"),
+            "dcr_95th":       g(r4, "dcr_95th_percentile"),
             "exact_match_rate":g(r4, "exact_match_rate"),
             # Dim 5
             "delta_dp_mean":  g_dict_mean(r5, "delta_dp"),

@@ -64,6 +64,11 @@ outputs/
 runs/
 logs/
 *.log
+*.jsonl
+figures/
+_probe_ckpts/
+_smoke_ckpts/
+BUGFIX_REPORT.md
 
 # ── IDE & editors ─────────────────────────────────────────────────────────────
 .vscode/
