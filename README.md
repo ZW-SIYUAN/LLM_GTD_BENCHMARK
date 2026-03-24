@@ -29,7 +29,7 @@ pip install -e ".[dev]"
 |---|---|---|---|
 | **0** 结构合法性 | `StructuralInterceptor` | IRR（废片率）、缺陷分布 | 全局 |
 | **1** 分布保真度 | `FidelityEvaluator` | KS、TVD、Pearson、CramerV、α-precision、β-recall、C2ST AUC | 全局 |
-| **2** 逻辑约束 | `LogicEvaluator` | DSI（GMM对数似然）、ICVR（FD违背率）、HCS（层次违背率）、MDI（算术恒等式违背率） | DSI全局；ICVR/HCS/MDI按注册 |
+| **2** 逻辑约束 | `LogicEvaluator` | DSI（GMM对数似然，80/20 hold-out OOS基准）、ICVR（FD违背率）、HCS（层次违背率）、MDI（算术恒等式违背率） | DSI全局；ICVR/HCS/MDI按注册 |
 | **3** 下游任务效用 | `MLUtilityEvaluator` / `LLMUtilityEvaluator` | TSTR/TRTR ROC-AUC、Macro-F1（分类）；R²、WMAPE（回归）；LLE Macro-F1（可选） | 全局（需指定 target_col） |
 | **4** 隐私与防记忆 | `PrivacyEvaluator` / `MemorizationProbe` | DCR 5th percentile、Exact Match Rate；Masked DLT PPL gap（可选） | 黑盒全局；白盒需生成器权重 |
 | **5** 公平性与去偏 | `FairnessEvaluator` | NMI（内在偏差）、ΔDP、ΔEOP、ΔEO（分类）；ΔSPG（回归）；可选交叉公平性 | 全局（需指定 protected_cols） |
@@ -99,8 +99,9 @@ print(result2.summary)
 # ── Dimension 2: Cross-Column Logic & Dependencies ────────
 #   DSI (Distributional Similarity Index):
 #     Synth log-likelihood        : -3.5375
-#     Real  log-likelihood (ref)  : -3.5172
+#     Real  log-likelihood (OOS)  : -3.5172
 #     Gap   (↓ better, 0=perfect) : 0.0204
+#     Relative gap (↓ better, 0%) : 0.12%
 #     GMM components selected     : 3
 #   ICVR (Functional Dependency Violation Rate, ↓ better):
 #     education_num→education     : 0.0023
@@ -205,6 +206,7 @@ llm_gtd_benchmark/
 |---|---|---|---|
 | DSI gap（real_ll − synth_ll） | ≥ 0 | ↓（0=完美） | 无 |
 | DSI synth_ll | 无界 | ↑ | 无 |
+| DSI relative gap（%） | ≥ 0 % | ↓（0%=完美） | 无 |
 | ICVR | [0, 1] | ↓ | `known_fds` |
 | HCS violation rate | [0, 1] | ↓ | `hierarchies` |
 | MDI violation rate | [0, 1] | ↓ | `math_equations` |
@@ -470,6 +472,7 @@ print(report.summary)
 - **OOM 安全**：超 50k 行自动分层子采样；KNN 使用 faiss/sklearn 自适应后端；DCR 双重分块广播
 - **FutureWarning 清洁**：所有 pandas 操作经过验证，无弃用警告
 - **NaN 优雅降级**：指标不适用时返回 NaN，不抛出异常
+- **DSI 无偏基准**：GMM 在 80 % 真实数据上拟合，`real_ll` 在独立的 20 % hold-out 集上评分，消除 in-sample 乐观偏差；数据量不足 25 行时回退为 in-sample 并记录警告
 - **可复现**：所有随机操作统一接受 `random_state` 参数
 - **可选依赖分层**：核心评估（Dim0-2 + Dim4 黑盒 + Dim5）仅需 numpy/pandas/scipy/sklearn；xgboost 可选（Dim3/Dim5 探针 fallback 到 RandomForest）；faiss 可选加速；transformers/peft/trl 仅 Dim3 LLE 和 Dim4 DLT 需要
 - **隐私硬护栏**：`DataCopyingWarning` 在检测到近似复制时自动触发

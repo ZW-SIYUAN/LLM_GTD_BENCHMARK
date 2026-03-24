@@ -19,9 +19,11 @@ require evaluating the data against an explicit semantic knowledge base.
 Metrics implemented
 -------------------
 DSI  — Distributional Similarity Index (universal)
-    Fits a Gaussian Mixture Model to the *real* continuous-feature manifold.
-    Scores synthetic samples against this model.  Reports both the raw
-    mean log-likelihood and the gap from the real-data baseline.
+    Fits a Gaussian Mixture Model on an 80 % training split of the real
+    continuous-feature manifold.  Scores synthetic samples and the held-out
+    20 % real samples against this model, yielding an out-of-sample baseline
+    (real_ll) that is free of in-sample optimism bias.  Reports both the raw
+    mean log-likelihoods and the gap.
 
 ICVR — Inter-Column Violation Rate (conditional on LogicSpec.known_fds)
     For each registered A→B functional dependency, measures the fraction of
@@ -41,6 +43,10 @@ Engineering guarantees
 - DSI operates exclusively on continuous features (GMM is undefined for
   categorical inputs); PCA is applied when n_continuous > 20 to avoid
   the curse of dimensionality.
+- GMM is fitted on an 80/20 hold-out split of real data; real_ll is
+  scored on the held-out 20 %, preventing in-sample optimism bias.
+  Falls back to in-sample scoring (with a logged warning) when fewer
+  than 25 clean real rows are available.
 - BIC-based automatic GMM component selection avoids over-fitting on
   small datasets while allowing sufficient expressiveness on large ones.
 - ICVR validates that the declared FD actually holds in *real_df* before
@@ -64,6 +70,7 @@ import numpy as np
 import pandas as pd
 from sklearn.decomposition import PCA
 from sklearn.mixture import GaussianMixture
+from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
 from llm_gtd_benchmark.core.logic_spec import LogicSpec, MathEquation
@@ -75,6 +82,8 @@ _NAN = float("nan")
 _MDI_EPSILON = 1e-3        # relative-error tolerance for arithmetic identities
 _PCA_MAX_FEATURES = 20     # apply PCA when n_continuous exceeds this threshold
 _GMM_CANDIDATES = [1, 2, 3, 5, 8]  # BIC search grid for n_components
+_DSI_HOLDOUT_RATIO = 0.20  # fraction of real rows reserved for out-of-sample real_ll
+_DSI_MIN_TOTAL_FOR_SPLIT = 25  # fall back to in-sample when fewer clean rows available
 
 
 # ---------------------------------------------------------------------------
@@ -93,8 +102,9 @@ class Dim2Result:
         continuous features.  Higher = better (synthetic is more likely under
         the real distribution).  Comparable only within the same dataset.
     dsi_real_ll:
-        Mean log-likelihood of real held-out samples under the same GMM.
-        Serves as the upper-bound reference for dsi_synth_ll.
+        Mean log-likelihood of the held-out 20 % real samples under the GMM
+        fitted on the remaining 80 % of real data.  Because this is scored on
+        unseen data, it is an unbiased upper-bound reference for dsi_synth_ll.
     dsi_gap:
         ``dsi_real_ll - dsi_synth_ll``.  Lower = better (0 = perfect match).
         This is the cross-dataset-comparable form of DSI.
@@ -160,7 +170,7 @@ class Dim2Result:
             "── Dimension 2: Cross-Column Logic & Dependencies ────────",
             "  DSI (Distributional Similarity Index):",
             f"    Synth log-likelihood        : {_f(self.dsi_synth_ll)}",
-            f"    Real  log-likelihood (ref)  : {_f(self.dsi_real_ll)}",
+            f"    Real  log-likelihood (OOS)  : {_f(self.dsi_real_ll)}",
             f"    Gap   (↓ better, 0=perfect) : {_f(self.dsi_gap)}",
             f"    Relative gap (↓ better, 0%) : {_pct(self.dsi_relative_gap)}",
             f"    GMM components selected     : {self.gmm_n_components}",
@@ -250,6 +260,7 @@ class LogicEvaluator:
         self._pca: Optional[PCA] = None
         self._gmm: Optional[GaussianMixture] = None
         self._gmm_k: int = 0
+        self._X_real_holdout: Optional[np.ndarray] = None  # pre-transformed OOS real rows
 
         if self._cont_cols:
             self._fit_dsi_pipeline()
@@ -297,7 +308,13 @@ class LogicEvaluator:
     # ── DSI pipeline ─────────────────────────────────────────────────────────
 
     def _fit_dsi_pipeline(self) -> None:
-        """Fit StandardScaler + optional PCA + GMM on real continuous features."""
+        """Fit StandardScaler + optional PCA + GMM on real continuous features.
+
+        Uses an 80/20 hold-out split so that ``real_ll`` in :meth:`_calc_dsi`
+        is scored on out-of-sample data, eliminating in-sample optimism bias.
+        Falls back to in-sample scoring (with a warning) when fewer than
+        ``_DSI_MIN_TOTAL_FOR_SPLIT`` clean rows are available.
+        """
         X_real = self.real_df[self._cont_cols].astype(float).values
 
         # Remove rows with NaN (edge case: real data may have missing values)
@@ -306,8 +323,29 @@ class LogicEvaluator:
             logger.warning("DSI: all real rows have NaN in continuous columns; skipping.")
             return
 
-        # StandardScale
-        X_scaled = self._scaler.fit_transform(X_real)
+        # ── Hold-out split ────────────────────────────────────────────────
+        n = len(X_real)
+        if n < _DSI_MIN_TOTAL_FOR_SPLIT:
+            logger.warning(
+                "DSI: only %d real rows — too few for a hold-out split "
+                "(need ≥ %d).  real_ll will be in-sample and slightly optimistic.",
+                n, _DSI_MIN_TOTAL_FOR_SPLIT,
+            )
+            X_train = X_real
+            X_holdout = X_real
+        else:
+            X_train, X_holdout = train_test_split(
+                X_real,
+                test_size=_DSI_HOLDOUT_RATIO,
+                random_state=self.random_state,
+            )
+            logger.debug(
+                "DSI: split real data into %d train / %d holdout rows.",
+                len(X_train), len(X_holdout),
+            )
+
+        # ── Preprocessing fitted on train split only ──────────────────────
+        X_scaled = self._scaler.fit_transform(X_train)
 
         # PCA when dimensionality is high
         n_features = X_scaled.shape[1]
@@ -322,8 +360,14 @@ class LogicEvaluator:
                 self._pca.explained_variance_ratio_.sum() * 100,
             )
 
-        # BIC-based GMM component selection
+        # ── GMM fitted on train split ─────────────────────────────────────
         self._gmm, self._gmm_k = self._select_gmm(X_scaled)
+
+        # ── Pre-transform holdout with the fitted scaler/PCA ──────────────
+        X_holdout_scaled = self._scaler.transform(X_holdout)
+        if self._pca is not None:
+            X_holdout_scaled = self._pca.transform(X_holdout_scaled)
+        self._X_real_holdout = X_holdout_scaled
 
     def _select_gmm(self, X: np.ndarray) -> Tuple[GaussianMixture, int]:
         """Select GMM via BIC on the real data manifold."""
@@ -393,19 +437,26 @@ class LogicEvaluator:
         return X
 
     def _calc_dsi(self, synth: pd.DataFrame) -> Tuple[float, float, float]:
-        """Return (synth_ll, real_ll, gap)."""
-        X_real = self._encode_continuous(self.real_df)
-        X_synth = self._encode_continuous(synth)
+        """Return (synth_ll, real_ll, gap).
 
-        if X_real is None or X_synth is None:
+        ``real_ll`` is scored on the pre-computed hold-out split stored in
+        ``self._X_real_holdout``, making it an out-of-sample (OOS) reference
+        that is unaffected by GMM in-sample optimism.
+        """
+        if self._X_real_holdout is None:
             return _NAN, _NAN, _NAN
 
-        real_ll = float(np.mean(self._gmm.score_samples(X_real)))
+        X_synth = self._encode_continuous(synth)
+        if X_synth is None:
+            return _NAN, _NAN, _NAN
+
+        real_ll = float(np.mean(self._gmm.score_samples(self._X_real_holdout)))
         synth_ll = float(np.mean(self._gmm.score_samples(X_synth)))
         gap = real_ll - synth_ll
 
         logger.info(
-            "DSI: real_ll=%.4f  synth_ll=%.4f  gap=%.4f.", real_ll, synth_ll, gap
+            "DSI: real_ll=%.4f (OOS holdout)  synth_ll=%.4f  gap=%.4f.",
+            real_ll, synth_ll, gap,
         )
         return synth_ll, real_ll, gap
 
